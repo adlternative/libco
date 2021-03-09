@@ -29,11 +29,17 @@ public:
 //-- 1.1 comac_argc
 
 #define comac_get_args_cnt( ... ) comac_arg_n( __VA_ARGS__ )
+/* 效果是 获得第9个参数的值 */
 #define comac_arg_n( _0,_1,_2,_3,_4,_5,_6,_7,N,...) N
+
 #define comac_args_seqs() 7,6,5,4,3,2,1,0
+/* ##单纯连接在一起 */
 #define comac_join_1( x,y ) x##y
 
+/* 最终效果是在参数小于等于7的情况下 获得参数的数量 */
 #define comac_argc( ... ) comac_get_args_cnt( 0,##__VA_ARGS__,comac_args_seqs() )
+
+/* ##单纯连接在一起 */
 #define comac_join( x,y) comac_join_1( x,y )
 
 //-- 1.2 repeat

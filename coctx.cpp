@@ -107,20 +107,36 @@ int coctx_make(coctx_t* ctx, coctx_pfn_t pfn, const void* s, const void* s1) {
   return 0;
 }
 #elif defined(__x86_64__)
+/*
+*全文唯一一处coctx_make是co_resume
+*@s: stCoRoutine_t*co
+*@s1: NULL
+*/
 int coctx_make(coctx_t* ctx, coctx_pfn_t pfn, const void* s, const void* s1) {
-  char* sp = ctx->ss_sp + ctx->ss_size - sizeof(void*);
-  sp = (char*)((unsigned long)sp & -16LL);
+/*
+H
+||-----ss_sp + ss_size-------||
+||-----sp------||
+...
+||------ss_sp(stack_buffer)------||
+L
+*/
 
-  memset(ctx->regs, 0, sizeof(ctx->regs));
+  char* sp = ctx->ss_sp + ctx->ss_size - sizeof(void*); /* 基址 + 栈大小 - 一个寄存器大小 获得高地址赋值给sp */
+  sp = (char*)((unsigned long)sp & -16LL);/* sp 对齐16字节 0xmmmmmm0 */
+
+  memset(ctx->regs, 0, sizeof(ctx->regs));/* 清空寄存器 */
   void** ret_addr = (void**)(sp);
-  *ret_addr = (void*)pfn;
+  *ret_addr = (void*)pfn;/* 这个返回地址上存入需要执行的函数 */
+  /* 在寄存器中记录一些必要信息 */
+  ctx->regs[kRSP] = sp;/* 保存sp */
 
-  ctx->regs[kRSP] = sp;
+  ctx->regs[kRETAddr] = (char*)pfn;/* 别藏了应该就是rip,保存协程函数 */
 
-  ctx->regs[kRETAddr] = (char*)pfn;
-
+  /* 保存需要切换回复的协程对象指针,
+  等会儿汇编会调用这俩寄存器的值存入rdi和rsi中。 */
   ctx->regs[kRDI] = (char*)s;
-  ctx->regs[kRSI] = (char*)s1;
+  ctx->regs[kRSI] = (char*)s1;/* NULL */
   return 0;
 }
 

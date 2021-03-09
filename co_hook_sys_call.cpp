@@ -1010,8 +1010,8 @@ struct hostent *co_gethostbyname(const char *name)
 	int *h_errnop = &(__co_hostbuf_wrap->host_errno);
 
 	int ret = -1;
-	while (ret = gethostbyname_r(name, host, __co_hostbuf_wrap->buffer, 
-				__co_hostbuf_wrap->iBufferSize, &result, h_errnop) == ERANGE && 
+	while ((ret = gethostbyname_r(name, host, __co_hostbuf_wrap->buffer, 
+				__co_hostbuf_wrap->iBufferSize, &result, h_errnop)) == ERANGE && 
 				*h_errnop == NETDB_INTERNAL )
 	{
 		free(__co_hostbuf_wrap->buffer);

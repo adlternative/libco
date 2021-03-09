@@ -51,7 +51,7 @@ struct stCoRoutine_t
 	stCoRoutineEnv_t *env;
 	pfn_co_routine_t pfn;
 	void *arg;
-	coctx_t ctx;
+	coctx_t ctx;/* 上下文 */
 
 	char cStart;
 	char cEnd;

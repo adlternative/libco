@@ -24,6 +24,7 @@
 
 #if !defined( __APPLE__ ) && !defined( __FreeBSD__ )
 
+/* epoll 简单封装 */
 int	co_epoll_wait( int epfd,struct co_epoll_res *events,int maxevents,int timeout )
 {
 	return epoll_wait( epfd,events->events,maxevents,timeout );
@@ -37,6 +38,7 @@ int	co_epoll_create( int size )
 	return epoll_create( size );
 }
 
+/* event数组的封装 */
 struct co_epoll_res *co_epoll_res_alloc( int n )
 {
 	struct co_epoll_res * ptr = 
@@ -48,6 +50,8 @@ struct co_epoll_res *co_epoll_res_alloc( int n )
 	return ptr;
 
 }
+
+/* 两次free是不是效率低下? */
 void co_epoll_res_free( struct co_epoll_res * ptr )
 {
 	if( !ptr ) return;

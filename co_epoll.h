@@ -30,9 +30,10 @@
 
 #include <sys/epoll.h>
 
+/* 结果集合封装 */
 struct co_epoll_res
 {
-	int size;
+	int size;/* size of events */
 	struct epoll_event *events;
 	struct kevent *eventlist;
 };

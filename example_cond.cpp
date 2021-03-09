@@ -67,17 +67,17 @@ void* Consumer(void* args)
 }
 int main()
 {
-	stEnv_t* env = new stEnv_t;
-	env->cond = co_cond_alloc();
+	stEnv_t* env = new stEnv_t;/* 申请一块 stEnv_t */
+	env->cond = co_cond_alloc();/* 申请一块 stCoCond_t */
 
-	stCoRoutine_t* consumer_routine;
-	co_create(&consumer_routine, NULL, Consumer, env);
-	co_resume(consumer_routine);
+	stCoRoutine_t* consumer_routine;/* 一个代表消费者的stCoRoutine_t */
+	co_create(&consumer_routine, NULL, Consumer, env);/* 创建协程 */
+	co_resume(consumer_routine);/*  启动协程 */
 
-	stCoRoutine_t* producer_routine;
+	stCoRoutine_t* producer_routine;/* 一个代表生产者的stCoRoutine_t */
 	co_create(&producer_routine, NULL, Producer, env);
 	co_resume(producer_routine);
 	
-	co_eventloop(co_get_epoll_ct(), NULL, NULL);
+	co_eventloop(co_get_epoll_ct(), NULL, NULL);/* loop and epoll_wait */
 	return 0;
 }

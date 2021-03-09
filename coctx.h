@@ -25,16 +25,19 @@ struct coctx_param_t
 	const void *s1;
 	const void *s2;
 };
+/* 上下文类，保存了寄存器 */
 struct coctx_t
 {
 #if defined(__i386__)
 	void *regs[ 8 ];
 #else
-	void *regs[ 14 ];
+	void *regs[ 14 ];// 14个寄存器，不包含
 #endif
-	size_t ss_size;
+	size_t ss_size;/* 栈的大小 */
+  /*  stack_mem->stack_buffer
+  然后除了整个coctx_t清空，ss_sp再也没有变过 */
 	char *ss_sp;
-	
+
 };
 
 int coctx_init( coctx_t *ctx );
