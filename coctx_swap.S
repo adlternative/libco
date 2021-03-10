@@ -65,7 +65,7 @@ coctx_swap:
 	  xorq %rax, %rax //rax = 0
 
     movq 48(%rsi), %rbp //rbp = 0
-    movq 104(%rsi), %rsp //rsp =*(regs[kRSP])=*sp=pfn
+    movq 104(%rsi), %rsp //rsp =*(regs[kRSP])=sp
     movq (%rsi), %r15 // 0
     movq 8(%rsi), %r14 // 0
     movq 16(%rsi), %r13 // 0
@@ -76,7 +76,7 @@ coctx_swap:
     movq 80(%rsi), %rdx //0
     movq 88(%rsi), %rcx //0
     movq 96(%rsi), %rbx //0
-		leaq 8(%rsp), %rsp //rsp之前在regs[13]
+		leaq 8(%rsp), %rsp //rsp= sp + 8
 		pushq 72(%rsi) //push rax=*ip=pfn 
 
     movq 64(%rsi), %rsi //rsi=NULL

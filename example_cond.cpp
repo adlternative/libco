@@ -75,8 +75,8 @@ int main()
 	co_resume(consumer_routine);/*  启动协程 */
 
 	stCoRoutine_t* producer_routine;/* 一个代表生产者的stCoRoutine_t */
-	co_create(&producer_routine, NULL, Producer, env);
-	co_resume(producer_routine);
+	co_create(&producer_routine, NULL, Producer, env);/* 创建协程 */
+	co_resume(producer_routine);/*  启动协程 */
 	
 	co_eventloop(co_get_epoll_ct(), NULL, NULL);/* loop and epoll_wait */
 	return 0;

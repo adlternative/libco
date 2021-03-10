@@ -131,7 +131,11 @@ L
   /* 在寄存器中记录一些必要信息 */
   ctx->regs[kRSP] = sp;/* 保存sp */
 
-  ctx->regs[kRETAddr] = (char*)pfn;/* 别藏了应该就是rip,保存协程函数 */
+/* 别藏了应该就是rip,
+  保存我们希望执行的协程函数，
+  不过这里是存的是会CoRoutineFunc，
+  内部会执行用户函数 */
+  ctx->regs[kRETAddr] = (char*)pfn;
 
   /* 保存需要切换回复的协程对象指针,
   等会儿汇编会调用这俩寄存器的值存入rdi和rsi中。 */

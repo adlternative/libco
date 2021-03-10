@@ -657,27 +657,35 @@ void save_stack_buffer(stCoRoutine_t* occupy_co)
 	stStackMem_t* stack_mem = occupy_co->stack_mem;
   /* bp 栈底高地址 ,sp 栈顶低地址 len为两者之差*/
 	int len = stack_mem->stack_bp - occupy_co->stack_sp;
-  /* free原有的缓冲区 */
+  /* free原有的栈缓存区内容 */
 	if (occupy_co->save_buffer)
 	{
 		free(occupy_co->save_buffer), occupy_co->save_buffer = NULL;
 	}
-  /* 新的缓冲区填入从stack_sp 到 stack_bp内的内容 */
+  /* 保存的缓冲区中填入从stack_sp 到 stack_bp内的内容 */
 	occupy_co->save_buffer = (char*)malloc(len); //malloc buf;
 	occupy_co->save_size = len;
 
 	memcpy(occupy_co->save_buffer, occupy_co->stack_sp, len);
 }
 
+/* 切换协程 核心代码*/
 void co_swap(stCoRoutine_t* curr, stCoRoutine_t* pending_co)
 {
   /* 获得env */
  	stCoRoutineEnv_t* env = co_get_curr_thread_env();
 
 	//get curr stack sp
+  /* 这里是获得了一个局部变量的地址作为stack_sp，
+    其实放在co_swap 的coctx_swap之前都可以，因为
+    这个stack_sp是共享栈模式下会复制到协程对象的
+    save_buffer空间内。下次切换回co_swap函数的时
+    候我们应该将协程栈空间的内容恢复。
+  */
 	char c;
 	curr->stack_sp= &c;
-
+  /* 如果不是分享栈，
+  那么就不管env的pendiong_co和 occupy_co */
 	if (!pending_co->cIsShareStack)
 	{
 		env->pending_co = NULL;
@@ -685,21 +693,44 @@ void co_swap(stCoRoutine_t* curr, stCoRoutine_t* pending_co)
 	}
 	else 
 	{
+    /* 将需要切换到的协程对象作为env的pending */
 		env->pending_co = pending_co;
 		//get last occupy co on the same stack mem
+    /* 找到需要切换到的协程对象的栈内存上的“占有者” */
 		stCoRoutine_t* occupy_co = pending_co->stack_mem->occupy_co;
 		//set pending co to occupy thest stack mem;
+    /* 更新共享栈的占用者为我们即将切换的协程 */
 		pending_co->stack_mem->occupy_co = pending_co;
-
+    /* 将env的占用者修改为旧的占用者 */
 		env->occupy_co = occupy_co;
+    /* 如果占用者存在且和我们即将切换
+      的协程不是同一个协程 */
 		if (occupy_co && occupy_co != pending_co)
 		{
+      /* 保存占用者栈内容 */
 			save_stack_buffer(occupy_co);
 		}
 	}
 
 	//swap context
   /* rdi rsi */
+  /* 保存旧协程寄存器到旧协程对象的协程栈，
+    并通过将需要切换的协程函数指针push入栈的方式，
+    最后ret弹栈到rip中执行需要切换的协程函数指针,
+    并通过切换的协程的reg[rsi] reg[rdi]中的内容
+    作为协程函数的参数。
+  （注意我这里说的rsi,rdi是给协程函数传参的co和NULL）
+  */
+  /* 函数传参　从左向右　rdi rsi，汇编代码会通过rdi,rsi　
+  读或者写reg[],之后rsp会置于sp+8的位置 然后从rbp-rsp之间
+  所有空间就是协程的栈帧。rsp现在在我们分配的堆内存的高地址上，
+  我们在协程如果有调用的函数就会向低地址开辟新的栈帧，这没有问题，
+  除非一直到协程栈的最低地址：ctx->ss_sp，那么我们的程序等着段错误吧！
+  值得思考的是分配的默认128KB～8MB 的堆内存可以开char s[128000]
+  char s[8000000]也是不小的空间，省着用吧！
+  （注意我这里说的rsi,rdi是给coctx_swap函数传参的&(curr->ctx)和
+    &(pending_co->ctx)
+  */
 	coctx_swap(&(curr->ctx),&(pending_co->ctx) );
 
 	//stack buffer may be overwrite, so get again;
@@ -710,6 +741,7 @@ void co_swap(stCoRoutine_t* curr, stCoRoutine_t* pending_co)
 	if (update_occupy_co && update_pending_co && update_occupy_co != update_pending_co)
 	{
 		//resume stack buffer
+    /* 恢复栈缓冲区 */
 		if (update_pending_co->save_buffer && update_pending_co->save_size > 0)
 		{
 			memcpy(update_pending_co->stack_sp, update_pending_co->save_buffer, update_pending_co->save_size);
@@ -953,10 +985,12 @@ void FreeEpoll( stCoEpoll_t *ctx )
 	free( ctx );
 }
 
+/* 获得当前协程 */
 stCoRoutine_t *GetCurrCo( stCoRoutineEnv_t *env )
 {
 	return env->pCallStack[ env->iCallStackSize - 1 ];
 }
+/* 获得当前线程上正在执行的协程 */
 stCoRoutine_t *GetCurrThreadCo( )
 {
 	stCoRoutineEnv_t *env = co_get_curr_thread_env();
