@@ -2,6 +2,7 @@
 
 #include "co_routine.h"
 
+/* 协程锁 */
 class clsCoMutex {
  public:
   clsCoMutex();
@@ -15,6 +16,7 @@ class clsCoMutex {
   int m_iWaitItemCnt;
 };
 
+/* 协程 lock_guard */
 class clsSmartLock {
  public:
   clsSmartLock(clsCoMutex* m) {

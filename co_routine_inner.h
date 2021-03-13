@@ -48,29 +48,28 @@ struct stShareStack_t
 
 struct stCoRoutine_t
 {
-	stCoRoutineEnv_t *env;
-	pfn_co_routine_t pfn;
-	void *arg;
+	stCoRoutineEnv_t *env;/* 线程环境 */
+	pfn_co_routine_t pfn;/* 用户函数 */
+	void *arg;/* 函数参数 */
 	coctx_t ctx;/* 上下文 */
 
-	char cStart;
-	char cEnd;
-	char cIsMain;
-	char cEnableSysHook;
-	char cIsShareStack;
+	char cStart;/* 是否开始 */
+	char cEnd;/* 是否结束 */
+	char cIsMain;/* 是不是主协程 */
+	char cEnableSysHook;/* 能否hook */
+	char cIsShareStack;/* 是不是共享栈 */
 
-	void *pvEnv;
+	void *pvEnv;/* 指向环境变量数组 */
 
 	//char sRunStack[ 1024 * 128 ];
-	stStackMem_t* stack_mem;
+	stStackMem_t* stack_mem; /* 栈底 */
 
+	//save stack buffer while confilct on same stack_buffer;
+	char* stack_sp; /* 用来作为需要保护的栈顶指针（不是真正意义上的rsp那个栈顶指针） */
+	unsigned int save_size;/* 保存栈大小 */
+	char* save_buffer;/* 保存栈 */
 
-	//save satck buffer while confilct on same stack_buffer;
-	char* stack_sp; 
-	unsigned int save_size;
-	char* save_buffer;
-
-	stCoSpec_t aSpec[1024];
+	stCoSpec_t aSpec[1024];/* 协程私有数据 */
 
 };
 

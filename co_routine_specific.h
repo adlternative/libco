@@ -43,7 +43,13 @@ int main()
 */
 extern int 	co_setspecific( pthread_key_t key, const void *value );
 extern void *	co_getspecific( pthread_key_t key );
+/* 直接做了一个类和其实体化对象y,
+可以调用pthread_once_t执行一个
+函数仅仅生成pthread_key_t 一次，
+并将它设置好动态分配的内存,
 
+暂时对 _routine_init_##name 存疑，因为没啥用
+*/
 #define CO_ROUTINE_SPECIFIC( name,y ) \
 \
 static pthread_once_t _routine_once_##name = PTHREAD_ONCE_INIT; \
@@ -83,4 +89,3 @@ public:\
 };\
 \
 static clsRoutineData_routine_##name<name> y;
-

@@ -55,14 +55,17 @@ struct rpchook_t
 	struct sockaddr_in dest; //maybe sockaddr_un;
 	int domain; //AF_LOCAL , AF_INET
 
-	struct timeval read_timeout;
-	struct timeval write_timeout;
+	struct timeval read_timeout;/* 读超时？微秒 */
+	struct timeval write_timeout;/*写超时？微秒 */
 };
+/* 奇怪的getpid */
 static inline pid_t GetPid()
 {
 	char **p = (char**)pthread_self();
 	return p ? *(pid_t*)(p + 18) : getpid();
 }
+
+/* 可见libco仅支持最多102400个socket文件描述符 */
 static rpchook_t *g_rpchook_socket_fd[ 102400 ] = { 0 };
 
 typedef int (*socket_pfn_t)(int domain, int type, int protocol);
@@ -116,7 +119,7 @@ static recv_pfn_t g_sys_recv_func 		= (recv_pfn_t)dlsym(RTLD_NEXT,"recv");
 
 static poll_pfn_t g_sys_poll_func 		= (poll_pfn_t)dlsym(RTLD_NEXT,"poll");
 
-static setsockopt_pfn_t g_sys_setsockopt_func 
+static setsockopt_pfn_t g_sys_setsockopt_func
 										= (setsockopt_pfn_t)dlsym(RTLD_NEXT,"setsockopt");
 static fcntl_pfn_t g_sys_fcntl_func 	= (fcntl_pfn_t)dlsym(RTLD_NEXT,"fcntl");
 
@@ -182,7 +185,7 @@ static inline ll64_t diff_ms(struct timeval &begin,struct timeval &end)
 }
 
 
-
+/* 获得g_rpchook_socket_fd 上 fd映射的rpchook_t 结构 */
 static inline rpchook_t * get_by_fd( int fd )
 {
 	if( fd > -1 && fd < (int)sizeof(g_rpchook_socket_fd) / (int)sizeof(g_rpchook_socket_fd[0]) )
@@ -191,18 +194,20 @@ static inline rpchook_t * get_by_fd( int fd )
 	}
 	return NULL;
 }
+/*fd 映射到分配的rpchook_t 结构，放在 g_rpchook_socket_fd */
 static inline rpchook_t * alloc_by_fd( int fd )
 {
 	if( fd > -1 && fd < (int)sizeof(g_rpchook_socket_fd) / (int)sizeof(g_rpchook_socket_fd[0]) )
 	{
 		rpchook_t *lp = (rpchook_t*)calloc( 1,sizeof(rpchook_t) );
-		lp->read_timeout.tv_sec = 1;
-		lp->write_timeout.tv_sec = 1;
+		lp->read_timeout.tv_sec = 1;/* 默认读超时1s */
+		lp->write_timeout.tv_sec = 1;/* 默认写超时1s */
 		g_rpchook_socket_fd[ fd ] = lp;
 		return lp;
 	}
 	return NULL;
 }
+/* 释放fd相应的rpchook_t */
 static inline void free_by_fd( int fd )
 {
 	if( fd > -1 && fd < (int)sizeof(g_rpchook_socket_fd) / (int)sizeof(g_rpchook_socket_fd[0]) )
@@ -211,12 +216,14 @@ static inline void free_by_fd( int fd )
 		if( lp )
 		{
 			g_rpchook_socket_fd[ fd ] = NULL;
-			free(lp);	
+			free(lp);
 		}
 	}
 	return;
 
 }
+
+/* 强硬 O_NON_BLOCK */
 int socket(int domain, int type, int protocol)
 {
 	HOOK_SYS_FUNC( socket );
@@ -230,10 +237,10 @@ int socket(int domain, int type, int protocol)
 	{
 		return fd;
 	}
-
+  /* 绑定到 rpchook_t*/
 	rpchook_t *lp = alloc_by_fd( fd );
 	lp->domain = domain;
-	
+	/* O_NON_BLOCK */
 	fcntl( fd, F_SETFL, g_sys_fcntl_func(fd, F_GETFL,0 ) );
 
 	return fd;
@@ -241,14 +248,17 @@ int socket(int domain, int type, int protocol)
 
 int co_accept( int fd, struct sockaddr *addr, socklen_t *len )
 {
+  /* 直接使用原始的 accept*/
 	int cli = accept( fd,addr,len );
 	if( cli < 0 )
 	{
 		return cli;
 	}
+  /* 绑定到 rpchook_t*/
 	alloc_by_fd( cli );
 	return cli;
 }
+
 int connect(int fd, const struct sockaddr *address, socklen_t address_len)
 {
 	HOOK_SYS_FUNC( connect );
@@ -268,11 +278,11 @@ int connect(int fd, const struct sockaddr *address, socklen_t address_len)
 	{
 		 memcpy( &(lp->dest),address,(int)address_len );
 	}
-	if( O_NONBLOCK & lp->user_flag ) 
+	if( O_NONBLOCK & lp->user_flag )
 	{
 		return ret;
 	}
-	
+
 	if (!(ret < 0 && errno == EINPROGRESS))
 	{
 		return ret;
@@ -316,7 +326,6 @@ int connect(int fd, const struct sockaddr *address, socklen_t address_len)
 	return ret;
 }
 
-
 int close(int fd)
 {
 	HOOK_SYS_FUNC( close );
@@ -331,22 +340,29 @@ int close(int fd)
 
 	return ret;
 }
+
 ssize_t read( int fd, void *buf, size_t nbyte )
 {
 	HOOK_SYS_FUNC( read );
-	
+
 	if( !co_is_enable_sys_hook() )
 	{
 		return g_sys_read_func( fd,buf,nbyte );
 	}
+  /* 获得fd对应的rpchook_t */
 	rpchook_t *lp = get_by_fd( fd );
-
-	if( !lp || ( O_NONBLOCK & lp->user_flag ) ) 
+  /* 如果没有相应的rpchook_t
+  而且是非阻塞那么我们就调用原始的read，
+  否则阻塞版本或者是我们hook的一个socket，
+  调用poll
+  */
+	if( !lp || ( O_NONBLOCK & lp->user_flag ) )
 	{
 		ssize_t ret = g_sys_read_func( fd,buf,nbyte );
 		return ret;
 	}
-	int timeout = ( lp->read_timeout.tv_sec * 1000 ) 
+  /* 设置读超时 ，毫秒 */
+	int timeout = ( lp->read_timeout.tv_sec * 1000 )
 				+ ( lp->read_timeout.tv_usec / 1000 );
 
 	struct pollfd pf = { 0 };
@@ -354,7 +370,7 @@ ssize_t read( int fd, void *buf, size_t nbyte )
 	pf.events = ( POLLIN | POLLERR | POLLHUP );
 
 	int pollret = poll( &pf,1,timeout );
-
+  /* 如果读事件发生会唤醒 */
 	ssize_t readret = g_sys_read_func( fd,(char*)buf ,nbyte );
 
 	if( readret < 0 )
@@ -362,9 +378,9 @@ ssize_t read( int fd, void *buf, size_t nbyte )
 		co_log_err("CO_ERR: read fd %d ret %ld errno %d poll ret %d timeout %d",
 					fd,readret,errno,pollret,timeout);
 	}
-
+  /* 不需要一次读完 */
 	return readret;
-	
+
 }
 ssize_t write( int fd, const void *buf, size_t nbyte )
 {
@@ -382,11 +398,12 @@ ssize_t write( int fd, const void *buf, size_t nbyte )
 		return ret;
 	}
 	size_t wrotelen = 0;
-	int timeout = ( lp->write_timeout.tv_sec * 1000 ) 
+  /* 设置写超时 */
+	int timeout = ( lp->write_timeout.tv_sec * 1000 )
 				+ ( lp->write_timeout.tv_usec / 1000 );
 
+  /*  直接写 */
 	ssize_t writeret = g_sys_write_func( fd,(const char*)buf + wrotelen,nbyte - wrotelen );
-
 	if (writeret == 0)
 	{
 		return writeret;
@@ -394,18 +411,18 @@ ssize_t write( int fd, const void *buf, size_t nbyte )
 
 	if( writeret > 0 )
 	{
-		wrotelen += writeret;	
+		wrotelen += writeret;
 	}
+  /* OS写缓冲满 写不完 */
 	while( wrotelen < nbyte )
 	{
-
 		struct pollfd pf = { 0 };
 		pf.fd = fd;
 		pf.events = ( POLLOUT | POLLERR | POLLHUP );
+    /* 等待可写 */
 		poll( &pf,1,timeout );
-
 		writeret = g_sys_write_func( fd,(const char*)buf + wrotelen,nbyte - wrotelen );
-		
+
 		if( writeret <= 0 )
 		{
 			break;
@@ -445,7 +462,7 @@ ssize_t sendto(int socket, const void *message, size_t length,
 	ssize_t ret = g_sys_sendto_func( socket,message,length,flags,dest_addr,dest_len );
 	if( ret < 0 && EAGAIN == errno )
 	{
-		int timeout = ( lp->write_timeout.tv_sec * 1000 ) 
+		int timeout = ( lp->write_timeout.tv_sec * 1000 )
 					+ ( lp->write_timeout.tv_usec / 1000 );
 
 
@@ -454,8 +471,8 @@ ssize_t sendto(int socket, const void *message, size_t length,
 		pf.events = ( POLLOUT | POLLERR | POLLHUP );
 		poll( &pf,1,timeout );
 
+    /* 貌似这里的sendto并不要求像上文的write一样一次写完 */
 		ret = g_sys_sendto_func( socket,message,length,flags,dest_addr,dest_len );
-
 	}
 	return ret;
 }
@@ -476,17 +493,18 @@ ssize_t recvfrom(int socket, void *buffer, size_t length,
 		return g_sys_recvfrom_func( socket,buffer,length,flags,address,address_len );
 	}
 
-	int timeout = ( lp->read_timeout.tv_sec * 1000 ) 
+	int timeout = ( lp->read_timeout.tv_sec * 1000 )
 				+ ( lp->read_timeout.tv_usec / 1000 );
-
 
 	struct pollfd pf = { 0 };
 	pf.fd = socket;
 	pf.events = ( POLLIN | POLLERR | POLLHUP );
 	poll( &pf,1,timeout );
-
+  /*不要求一次读完 */
 	ssize_t ret = g_sys_recvfrom_func( socket,buffer,length,flags,address,address_len );
+
 	return ret;
+
 }
 
 ssize_t send(int socket, const void *buffer, size_t length, int flags)
@@ -649,19 +667,22 @@ int setsockopt(int fd, int level, int option_name,
 	if( lp && SOL_SOCKET == level )
 	{
 		struct timeval *val = (struct timeval*)option_value;
-		if( SO_RCVTIMEO == option_name  ) 
+		if( SO_RCVTIMEO == option_name  )
 		{
+      /* 设置读超时时间 */
+      /* 如果超时 errno == EINPROGRESS */
 			memcpy( &lp->read_timeout,val,sizeof(*val) );
 		}
 		else if( SO_SNDTIMEO == option_name )
 		{
+      /* 设置写超时时间 */
 			memcpy( &lp->write_timeout,val,sizeof(*val) );
 		}
 	}
 	return g_sys_setsockopt_func( fd,level,option_name,option_value,option_len );
 }
 
-
+/* 必含 O_NONBLOCK */
 int fcntl(int fildes, int cmd, ...)
 {
 	HOOK_SYS_FUNC( fcntl );
@@ -698,6 +719,9 @@ int fcntl(int fildes, int cmd, ...)
 		case F_GETFL:
 		{
 			ret = g_sys_fcntl_func( fildes,cmd );
+      /* 这里如果用户之前设置的fd状态中没有非阻塞
+      则不返回阻塞...emmm也有道理吧，只是可能用户
+      会比较蒙*/
 			if (lp && !(lp->user_flag & O_NONBLOCK)) {
 				ret = ret & (~O_NONBLOCK);
 			}
@@ -714,6 +738,7 @@ int fcntl(int fildes, int cmd, ...)
 			ret = g_sys_fcntl_func( fildes,cmd,flag );
 			if( 0 == ret && lp )
 			{
+        /* 设置对应的user_flag */
 				lp->user_flag = param;
 			}
 			break;
@@ -756,7 +781,7 @@ int fcntl(int fildes, int cmd, ...)
 
 struct stCoSysEnv_t
 {
-	char *name;	
+	char *name;
 	char *value;
 };
 struct stCoSysEnvArr_t
@@ -764,9 +789,11 @@ struct stCoSysEnvArr_t
 	stCoSysEnv_t *data;
 	size_t cnt;
 };
+
+/* 复制一份环境变量 */
 static stCoSysEnvArr_t *dup_co_sysenv_arr( stCoSysEnvArr_t * arr )
 {
-	stCoSysEnvArr_t *lp = (stCoSysEnvArr_t*)calloc( sizeof(stCoSysEnvArr_t),1 );	
+	stCoSysEnvArr_t *lp = (stCoSysEnvArr_t*)calloc( sizeof(stCoSysEnvArr_t),1 );
 	if( arr->cnt )
 	{
 		lp->data = (stCoSysEnv_t*)calloc( sizeof(stCoSysEnv_t) * arr->cnt,1 );
@@ -775,14 +802,13 @@ static stCoSysEnvArr_t *dup_co_sysenv_arr( stCoSysEnvArr_t * arr )
 	}
 	return lp;
 }
-
+/* 比较环境变量 */
 static int co_sysenv_comp(const void *a, const void *b)
 {
 	return strcmp(((stCoSysEnv_t*)a)->name, ((stCoSysEnv_t*)b)->name); 
 }
+
 static stCoSysEnvArr_t g_co_sysenv = { 0 };
-
-
 
 void co_set_env_list( const char *name[],size_t cnt)
 {
@@ -806,9 +832,15 @@ void co_set_env_list( const char *name[],size_t cnt)
 		stCoSysEnv_t *lq = g_co_sysenv.data + 1;
 		for(size_t i=1;i<g_co_sysenv.cnt;i++)
 		{
+      /* 如果前一个环境变量和后面一个的key不同 */
 			if( strcmp( lp->name,lq->name ) )
 			{
+        /* 前者++ */
 				++lp;
+        /* 如果不同则让前者=后者
+          这里应该是处理如果出现了多个同key
+          的环境变量问题。
+        */
 				if( lq != lp  )
 				{
 					*lp = *lq;
@@ -818,7 +850,6 @@ void co_set_env_list( const char *name[],size_t cnt)
 		}
 		g_co_sysenv.cnt = lp - g_co_sysenv.data + 1;
 	}
-
 }
 
 int setenv(const char *n, const char *value, int overwrite)
@@ -829,30 +860,33 @@ int setenv(const char *n, const char *value, int overwrite)
 		stCoRoutine_t *self = co_self();
 		if( self )
 		{
+      /* 本协程没有环境变量,则从全局拷贝 */
 			if( !self->pvEnv )
 			{
 				self->pvEnv = dup_co_sysenv_arr( &g_co_sysenv );
 			}
 			stCoSysEnvArr_t *arr = (stCoSysEnvArr_t*)(self->pvEnv);
-
 			stCoSysEnv_t name = { (char*)n,0 };
-
+      /* 二分搜索name */
 			stCoSysEnv_t *e = (stCoSysEnv_t*)bsearch( &name,arr->data,arr->cnt,sizeof(name),co_sysenv_comp );
 
 			if( e )
 			{
+        /* 可重写 || 没有设置 */
 				if( overwrite || !e->value  )
 				{
+          /* 设置新的值,
+          注意到没有写到真的环境变量里面 */
 					if( e->value ) free( e->value );
 					e->value = ( value ? strdup( value ) : 0 );
 				}
 				return 0;
 			}
 		}
-
 	}
 	return g_sys_setenv_func( n,value,overwrite );
 }
+
 int unsetenv(const char *n)
 {
 	HOOK_SYS_FUNC( unsetenv )
@@ -885,6 +919,7 @@ int unsetenv(const char *n)
 	}
 	return g_sys_unsetenv_func( n );
 }
+
 char *getenv( const char *n )
 {
 	HOOK_SYS_FUNC( getenv )
@@ -908,9 +943,11 @@ char *getenv( const char *n )
 		}
 
 	}
+  /* 如果找不到也会调用它 */
 	return g_sys_getenv_func( n );
 
 }
+
 struct hostent* co_gethostbyname(const char *name);
 
 struct hostent *gethostbyname(const char *name)
@@ -934,7 +971,9 @@ int co_gethostbyname_r(const char* __restrict name,
                        char* __restrict __buf, size_t __buflen,
                        struct hostent** __restrict __result,
                        int* __restrict __h_errnop) {
-  static __thread clsCoMutex* tls_leaky_dns_lock = NULL; 
+  static __thread clsCoMutex* tls_leaky_dns_lock = NULL;
+  /* 线程 局部 私有变量...
+  不让自己yield以后的其他协程也来执行gethostbyname_r */
   if(tls_leaky_dns_lock == NULL) {
     tls_leaky_dns_lock = new clsCoMutex();
   }
@@ -971,11 +1010,12 @@ CO_ROUTINE_SPECIFIC(res_state_wrap, __co_state_wrap);
 
 extern "C"
 {
-	res_state __res_state() 
+  /* 和gethostname类似查域名用的 */
+	res_state __res_state()
 	{
 		HOOK_SYS_FUNC(__res_state);
 
-		if (!co_is_enable_sys_hook()) 
+		if (!co_is_enable_sys_hook())
 		{
 			return g_sys___res_state_func();
 		}
@@ -988,12 +1028,12 @@ extern "C"
 	}
 }
 
-struct hostbuf_wrap 
+struct hostbuf_wrap
 {
 	struct hostent host;
-	char* buffer;
-	size_t iBufferSize;
-	int host_errno;
+	char* buffer;/* 缓冲 */
+	size_t iBufferSize;/* 缓冲大小 */
+	int host_errno;/* 错误号 */
 };
 
 CO_ROUTINE_SPECIFIC(hostbuf_wrap, __co_hostbuf_wrap);
@@ -1005,13 +1045,14 @@ struct hostent *co_gethostbyname(const char *name)
 	{
 		return NULL;
 	}
-
+  /* 如果有buffer 且>1024B 清空 */
 	if (__co_hostbuf_wrap->buffer && __co_hostbuf_wrap->iBufferSize > 1024)
 	{
 		free(__co_hostbuf_wrap->buffer);
 		__co_hostbuf_wrap->buffer = NULL;
 	}
-	if (!__co_hostbuf_wrap->buffer)
+	/* 否则malloc并设置buffer大小 */
+  if (!__co_hostbuf_wrap->buffer)
 	{
 		__co_hostbuf_wrap->buffer = (char*)malloc(1024);
 		__co_hostbuf_wrap->iBufferSize = 1024;
@@ -1022,8 +1063,9 @@ struct hostent *co_gethostbyname(const char *name)
 	int *h_errnop = &(__co_hostbuf_wrap->host_errno);
 
 	int ret = -1;
-	while ((ret = gethostbyname_r(name, host, __co_hostbuf_wrap->buffer, 
-				__co_hostbuf_wrap->iBufferSize, &result, h_errnop)) == ERANGE && 
+  /* 传递给gethostbyname_r */
+	while ((ret = gethostbyname_r(name, host, __co_hostbuf_wrap->buffer,
+				__co_hostbuf_wrap->iBufferSize, &result, h_errnop)) == ERANGE &&
 				*h_errnop == NETDB_INTERNAL )
 	{
 		free(__co_hostbuf_wrap->buffer);
@@ -1031,7 +1073,7 @@ struct hostent *co_gethostbyname(const char *name)
 		__co_hostbuf_wrap->buffer = (char*)malloc(__co_hostbuf_wrap->iBufferSize);
 	}
 
-	if (ret == 0 && (host == result)) 
+	if (ret == 0 && (host == result))
 	{
 		return host;
 	}
@@ -1039,7 +1081,7 @@ struct hostent *co_gethostbyname(const char *name)
 }
 #endif
 
-
+/* 允许hook */
 void co_enable_hook_sys() //这函数必须在这里,否则本文件会被忽略！！！
 {
 	stCoRoutine_t *co = GetCurrThreadCo();

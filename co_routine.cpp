@@ -68,7 +68,7 @@ void co_log_err( const char *fmt,... )
 }
 
 
-#if defined( __LIBCO_RDTSCP__) 
+#if defined( __LIBCO_RDTSCP__)
 static unsigned long long counter(void)
 {
 	register uint32_t lo, hi;
@@ -326,7 +326,6 @@ static stStackMem_t* co_get_stackmem(stShareStack_t* share_stack)
 	return share_stack->stack_array[idx];
 }
 
-
 // ----------------------------------------------------------------------------
 struct stTimeoutItemLink_t;
 struct stTimeoutItem_t;
@@ -381,9 +380,10 @@ struct stTimeout_t
 {
 	stTimeoutItemLink_t *pItems;/* 时间轮数组 */
 	int iItemSize;/* 时间轮轮数 */
-
 	unsigned long long ullStart;/* 开始时间 */
-	long long llStartIdx;/* 坐标 估计是给时间轮转用的 */
+  /* 上次的TakeAllTimeout（检验超时）
+  结束时的时间轮坐标，是给时间轮转用的 */
+	long long llStartIdx;
 };
 /* 分配一个定时器 */
 stTimeout_t *AllocTimeout( int iSize )
@@ -392,7 +392,6 @@ stTimeout_t *AllocTimeout( int iSize )
 
 	lp->iItemSize = iSize;/* 60*1000 */
 	lp->pItems = (stTimeoutItemLink_t*)calloc( 1,sizeof(stTimeoutItemLink_t) * lp->iItemSize );
-
 	lp->ullStart = GetTickMS();/* 设置为当前时间戳 */
 	lp->llStartIdx = 0;
 
@@ -536,7 +535,7 @@ struct stCoRoutine_t *co_create_env( stCoRoutineEnv_t * env, const stCoRoutineAt
 		at.stack_size = 1024 * 1024 * 8;
 	}
   /* 取整 取上限 16^3B =2^12B = 4KB（页大小） 整数倍*/
-	if( at.stack_size & 0xFFF ) 
+	if( at.stack_size & 0xFFF )
 	{
 		at.stack_size &= ~0xFFF;
 		at.stack_size += 0x1000;
@@ -544,7 +543,7 @@ struct stCoRoutine_t *co_create_env( stCoRoutineEnv_t * env, const stCoRoutineAt
   /* 申请一个stCoRoutine_t */
 	stCoRoutine_t *lp = (stCoRoutine_t*)malloc( sizeof(stCoRoutine_t) );
 
-	memset( lp,0,(long)(sizeof(stCoRoutine_t))); 
+	memset( lp,0,(long)(sizeof(stCoRoutine_t)));
 
   /* 将env 函数 参数 传入 */
 	lp->env = env;
@@ -653,6 +652,8 @@ void co_resume( stCoRoutine_t *co )
 
 // walkerdu 2018-01-14
 // 用于reset超时无法重复使用的协程
+
+/* 协程 ”复用“ */
 void co_reset(stCoRoutine_t * co)
 {
     if(!co->cStart || co->cIsMain)
@@ -732,6 +733,9 @@ void co_swap(stCoRoutine_t* curr, stCoRoutine_t* pending_co)
     这个stack_sp是共享栈模式下会复制到协程对象的
     save_buffer空间内。下次切换回co_swap函数的时
     候我们应该将协程栈空间的内容恢复。
+
+    前面那个env可不是“栈”空间的变量。
+    从字符c开始下面的地址逐渐变大，我们需要将这些“栈”空间保护起来。
   */
 	char c;
 	curr->stack_sp= &c;
@@ -853,7 +857,7 @@ static uint32_t PollEvent2Epoll( short events )
 }
 static short EpollEvent2Poll( uint32_t events )
 {
-	short e = 0;	
+	short e = 0;
 	if( events & EPOLLIN ) 	e |= POLLIN;
 	if( events & EPOLLOUT ) e |= POLLOUT;
 	if( events & EPOLLHUP ) e |= POLLHUP;
@@ -908,8 +912,7 @@ void OnPollProcessEvent( stTimeoutItem_t * ap )
 }
 
 /*
-将epoll 上的事件复制到 定时器项上
-
+将epoll上的返回事件复制到poll项上，
 */
 void OnPollPreparePfn( stTimeoutItem_t * ap,struct epoll_event &e,stTimeoutItemLink_t *active )
 {
@@ -917,10 +920,11 @@ void OnPollPreparePfn( stTimeoutItem_t * ap,struct epoll_event &e,stTimeoutItemL
 	lp->pSelf->revents = EpollEvent2Poll( e.events );/* 填写pollfd.revents */
 	stPoll_t *pPoll = lp->pPoll;/* epoll对象 */
 	pPoll->iRaiseCnt++;/* epoll_wait返回后 触发事件次数++ */
-  /* 这个iAllEventDetach
-  全局没有其他地方用到
-  或许表示epoll执行了一次 poll
-  第一次触发事件从从epoll的定时器链表中删除，并将
+  /* 这个iAllEventDetach 全局没有其他地方用到
+  表示第一次触发了“活跃”事件后就把该“定时器”项
+  从epoll的定时器中删除，因为我们不希望后面检验
+  超时时间的时候再将它们检测到（它们是poll注册的事件们）
+  再添加到活跃列表中。
   */
 	if( !pPoll->iAllEventDetach )
 	{
@@ -962,8 +966,10 @@ void co_eventloop( stCoEpoll_t *ctx,pfn_co_eventloop_t pfn,void *arg )
       /* 执行可能的准备函数
       如果是hook poll 中 会注册OnPollPreparePfn
       其中会将返回的事件result->events[i]复制到
-      item（poll项）定时器项上，还有一些特殊的情况
-      会将item（poll项）定时器项加入到active定时器链表中（暂时不知道为何）
+      item（poll项）定时器项上，然后将这些“活跃”事件
+      从epoll的定时中删除，再添加到活跃链表中，
+      （作用上 为了复制事件到pollfd.revents之外，
+      只是为了检测超时事件不会检测到“活跃”事件）
       */
 			if( item->pfnPrepare )
 			{
@@ -1187,10 +1193,10 @@ int co_poll_inner( stCoEpoll_t *ctx,struct pollfd fds[], nfds_t nfds, int timeou
     时间轮上。其实这里也可以看出来poll
     这个被hook的系统调用即使没有注册任何事件，
     依旧会注册给主协程epoll一个超时事件，主协程
-    无论如何1s就会醒来，然后会依次执行epoll上注册的
+    无论如何1ms就会醒来，然后会依次执行epoll上注册的
     每个超时事件或者活跃事件，
     回调函数OnPollProcessEvent 切换回本协程（注意并不是指
-    真1s，若在某个超时事件切换到别的协程，然后一直在那里不切出，
+    真1ms，若在某个超时事件切换到别的协程，然后一直在那里不切出，
     那其他协程就会持续饥饿）
   */
 	int ret = AddTimeout( ctx->pTimeout,&arg,now );
@@ -1243,7 +1249,7 @@ int co_poll_inner( stCoEpoll_t *ctx,struct pollfd fds[], nfds_t nfds, int timeou
 	return iRaiseCnt;
 }
 
-/* 无超时版本的co_poll_inner */
+/* 无pollfunc 的co_poll_inner */
 int	co_poll( stCoEpoll_t *ctx,struct pollfd fds[], nfds_t nfds, int timeout_ms )
 {
 	return co_poll_inner(ctx, fds, nfds, timeout_ms, NULL);
@@ -1268,20 +1274,24 @@ struct stHookPThreadSpec_t
 	stCoRoutine_t *co;
 	void *value;
 
-	enum 
+	enum
 	{
 		size = 1024
 	};
 };
+
+/* 直接从协程中获取 线程私有数据*/
 void *co_getspecific(pthread_key_t key)
 {
 	stCoRoutine_t *co = GetCurrThreadCo();
+  /* 如果是主协程 */
 	if( !co || co->cIsMain )
 	{
 		return pthread_getspecific( key );
 	}
 	return co->aSpec[ key ].value;
 }
+/* 直接从协程中写入 线程私有数据*/
 int co_setspecific(pthread_key_t key, const void *value)
 {
 	stCoRoutine_t *co = GetCurrThreadCo();
@@ -1292,7 +1302,6 @@ int co_setspecific(pthread_key_t key, const void *value)
 	co->aSpec[ key ].value = (void*)value;
 	return 0;
 }
-
 
 /* 禁用hook */
 void co_disable_hook_sys()
@@ -1321,7 +1330,7 @@ stCoRoutine_t *co_self()
 //co cond
 struct stCoCond_t;
 
-/* 含有一个定时器项 */
+/* 含有一个定时器项的条件变量项 */
 struct stCoCondItem_t
 {
 	stCoCondItem_t *pPrev;
@@ -1331,16 +1340,14 @@ struct stCoCondItem_t
 	stTimeoutItem_t timeout;
 };
 
-/* stCoCond_t是一个链表 */
+/* stCoCond_t是一个条件变量链表 */
 struct stCoCond_t
 {
 	stCoCondItem_t *head;
 	stCoCondItem_t *tail;
 };
 
-/* 和 OnPollProcessEvent 一样 也是resume
-  同时我们可以看出libco代码有多烂了。
-*/
+/* 和 OnPollProcessEvent 一样 也是resume */
 static void OnSignalProcessEvent( stTimeoutItem_t * ap )
 {
 	stCoRoutine_t *co = (stCoRoutine_t*)ap->pArg;
@@ -1349,19 +1356,22 @@ static void OnSignalProcessEvent( stTimeoutItem_t * ap )
 
 stCoCondItem_t *co_cond_pop( stCoCond_t *link );
 
+/* 将 条件变量列表的 第一个条件变量 唤醒 */
 int co_cond_signal( stCoCond_t *si )
 {
+  /* 弹出条件变量链表头 */
 	stCoCondItem_t * sp = co_cond_pop( si );
-	if( !sp ) 
+	if( !sp )
 	{
 		return 0;
 	}
+  /* 从epoll的定时器删除该条件变量上的定时器项？ */
 	RemoveFromLink<stTimeoutItem_t,stTimeoutItemLink_t>( &sp->timeout );
-
+  /* 再直接把定时器加入到epoll的活跃定时器链表上，哇骚！ */
 	AddTail( co_get_curr_thread_env()->pEpoll->pstActiveList,&sp->timeout );
-
 	return 0;
 }
+/* 将 条件变量列表的所有条件变量 唤醒 */
 int co_cond_broadcast( stCoCond_t *si )
 {
 	for(;;)
@@ -1377,9 +1387,18 @@ int co_cond_broadcast( stCoCond_t *si )
 	return 0;
 }
 
-
+/* 类似于协程的条件变量 cond_wait ，
+不过不需要条件和锁 ，直接给epoll注册个超时,
+然后对应的signal or broadcast 会可能的 早一些 唤醒它，
+仅此而以。而且会添加到stCoCond_t link上，
+如果多个本线程注册的co_cond_timedwait，用signal 只能
+“唤醒”最晚注册的那个，broadcast会一个个唤醒所有。
+所以这个"cond"更类似于“sleep” , "signal" "broadcast"更
+类似于alarm 。
+*/
 int co_cond_timedwait( stCoCond_t *link,int ms )
 {
+  /* 申请条件变量项 */
 	stCoCondItem_t* psi = (stCoCondItem_t*)calloc(1, sizeof(stCoCondItem_t));
 	psi->timeout.pArg = GetCurrThreadCo();
 	psi->timeout.pfnProcess = OnSignalProcessEvent;
@@ -1387,8 +1406,8 @@ int co_cond_timedwait( stCoCond_t *link,int ms )
 	if( ms > 0 )
 	{
 		unsigned long long now = GetTickMS();
-		psi->timeout.ullExpireTime = now + ms;
-
+		psi->timeout.ullExpireTime = now + ms;/* 超时事件 */
+    /* 添加定时器项到poll的定时器上 */
 		int ret = AddTimeout( co_get_curr_thread_env()->pEpoll->pTimeout,&psi->timeout,now );
 		if( ret != 0 )
 		{
@@ -1396,14 +1415,13 @@ int co_cond_timedwait( stCoCond_t *link,int ms )
 			return ret;
 		}
 	}
+  /* 将条件变量项添加到link链表上 */
 	AddTail( link, psi);
-
+  /* yield出去 等待epoll唤醒 */
 	co_yield_ct();
-
-
+  /* 从条件变量链表中删除该条件变量 */
 	RemoveFromLink<stCoCondItem_t,stCoCond_t>( psi );
 	free(psi);
-
 	return 0;
 }
 

@@ -42,7 +42,11 @@ void* Producer(void* args)
 		task->id = id++;
 		env->task_queue.push(task);
 		printf("%s:%d produce task %d\n", __func__, __LINE__, task->id);
-		co_cond_signal(env->cond);
+    /* 条件变量 ”通知“  也就是在epoll上
+    让cond链表上的最后一个定时器项能早些
+    被epoll唤醒 */
+    co_cond_signal(env->cond);
+    /* yield */
 		poll(NULL, 0, 1000);
 	}
 	return NULL;

@@ -72,6 +72,7 @@ void* RoutineFunc(void* args)
 	return NULL;
 }
 
+/* 体现出协程私有 */
 int main(int argc, char* argv[])
 {
 	co_set_env_list(CGI_ENV_HOOK_LIST, sizeof(CGI_ENV_HOOK_LIST) / sizeof(char*));
