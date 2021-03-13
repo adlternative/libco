@@ -572,7 +572,7 @@ ssize_t recv( int socket, void *buffer, size_t length, int flags )
 	}
 
 	return readret;
-	
+
 }
 
 extern int co_poll_inner( stCoEpoll_t *ctx,struct pollfd fds[], nfds_t nfds, int timeout, poll_pfn_t pollfunc);
@@ -580,22 +580,31 @@ extern int co_poll_inner( stCoEpoll_t *ctx,struct pollfd fds[], nfds_t nfds, int
 int poll(struct pollfd fds[], nfds_t nfds, int timeout)
 {
 	HOOK_SYS_FUNC( poll );
-
+  /* 如果不支持hook获得超时时间为0 */
+  /* 那就调用原始的poll函数就好了 */
+  /* 指定timeout为0将导致poll()立即返回，
+  即使没有准备好文件描述符。 (timeout毫秒) */
 	if (!co_is_enable_sys_hook() || timeout == 0) {
 		return g_sys_poll_func(fds, nfds, timeout);
 	}
 	pollfd *fds_merge = NULL;
 	nfds_t nfds_merge = 0;
-	std::map<int, int> m;  // fd --> idx
+	std::map<int, int> m;  // fd --> idx(nfds_merge)
 	std::map<int, int>::iterator it;
+  /* 如果关注的事件数量大于1 */
 	if (nfds > 1) {
+    /* 那么分配一个数组 */
 		fds_merge = (pollfd *)malloc(sizeof(pollfd) * nfds);
+    /* 遍历整个fds */
 		for (size_t i = 0; i < nfds; i++) {
+        /* 加入数组 */
 			if ((it = m.find(fds[i].fd)) == m.end()) {
 				fds_merge[nfds_merge] = fds[i];
 				m[fds[i].fd] = nfds_merge;
 				nfds_merge++;
 			} else {
+        /* 如果多个pollfd对象关注了一个fd
+          那么我们就将关注事件统一到一起 */
 				int j = it->second;
 				fds_merge[j].events |= fds[i].events;  // merge in j slot
 			}
@@ -603,12 +612,17 @@ int poll(struct pollfd fds[], nfds_t nfds, int timeout)
 	}
 
 	int ret = 0;
+  /* 如果没有多个pollfd对象关注了一个fd
+  那么关注数量是 nfds */
 	if (nfds_merge == nfds || nfds == 1) {
 		ret = co_poll_inner(co_get_epoll_ct(), fds, nfds, timeout, g_sys_poll_func);
 	} else {
+    /* 如果多个pollfd对象关注了一个fd ，
+    那么关注数量是 nfds_merge*/
 		ret = co_poll_inner(co_get_epoll_ct(), fds_merge, nfds_merge, timeout,
 				g_sys_poll_func);
 		if (ret > 0) {
+      /* 对fds进行填写revents  */
 			for (size_t i = 0; i < nfds; i++) {
 				it = m.find(fds[i].fd);
 				if (it != m.end()) {
@@ -620,8 +634,6 @@ int poll(struct pollfd fds[], nfds_t nfds, int timeout)
 	}
 	free(fds_merge);
 	return ret;
-
-
 }
 int setsockopt(int fd, int level, int option_name,
 			                 const void *option_value, socklen_t option_len)
@@ -771,7 +783,7 @@ static int co_sysenv_comp(const void *a, const void *b)
 static stCoSysEnvArr_t g_co_sysenv = { 0 };
 
 
-  
+
 void co_set_env_list( const char *name[],size_t cnt)
 {
 	if( g_co_sysenv.data )

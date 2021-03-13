@@ -38,7 +38,7 @@ int	co_epoll_create( int size )
 	return epoll_create( size );
 }
 
-/* event数组的封装 */
+/* event数组的封装 ，可优化！一处malloc一处free*/
 struct co_epoll_res *co_epoll_res_alloc( int n )
 {
 	struct co_epoll_res * ptr = 
